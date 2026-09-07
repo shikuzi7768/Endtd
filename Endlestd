@@ -1,0 +1,188 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- Remote Event dengan Timeout aman
+local PlaceEvent = ReplicatedStorage:WaitForChild("PlaceTurret", 3)
+local TurretAction = ReplicatedStorage:WaitForChild("TurretAction", 3)
+local SpeedEvent = ReplicatedStorage:FindFirstChild("SetGameSpeed") or ReplicatedStorage:WaitForChild("SetGameSpeed", 2)
+
+-- File Storage
+local SAVE_FILE_NAME = "RobloxTowerMacro_MultiSlots.json"
+
+-- Database Macro Default
+local MacroData = {
+	SelectedSlot = 1,
+	AutoPlayEnabled = false,
+	AutoPlaySlot = 1,
+	AutoSpeedEnabled = true,
+	Slots = {
+		[1] = {}, [2] = {}, [3] = {}, [4] = {}, [5] = {}
+	}
+}
+
+-- State Macro Runtime
+local isRecording = false
+local isPlaying = false
+local startTime = 0
+local recordedActions = {}
+
+-- Safe File Operations (Tidak akan membuat script crash/gantung jika executor tidak support)
+local function safeWriteFile(name, content)
+	pcall(function()
+		if writefile then
+			writefile(name, content)
+		end
+	end)
+end
+
+local function safeReadFile(name)
+	local result = nil
+	pcall(function()
+		if readfile and isfile and isfile(name) then
+			result = readfile(name)
+		end
+	end)
+	return result
+end
+
+-- Storage Logic Safe
+local function saveAllDataToFile()
+	pcall(function()
+		local serializableActions = {}
+		for _, act in ipairs(recordedActions) do
+			local actCopy = {
+				time = act.time,
+				type = act.type,
+				towerName = act.towerName
+			}
+			if act.pos then actCopy.pos = {X = act.pos.X, Y = act.pos.Y, Z = act.pos.Z} end
+			if act.args then
+				actCopy.args = {}
+				for i, v in ipairs(act.args) do
+					if typeof(v) == "Vector3" then
+						actCopy.args[i] = {Type = "Vector3", X = v.X, Y = v.Y, Z = v.Z}
+					else
+						actCopy.args[i] = v
+					end
+				end
+			end
+			table.insert(serializableActions, actCopy)
+		end
+
+		MacroData.Slots[MacroData.SelectedSlot] = serializableActions
+		local json = HttpService:JSONEncode(MacroData)
+		safeWriteFile(SAVE_FILE_NAME, json)
+	end)
+end
+
+local function loadAllDataFromFile()
+	pcall(function()
+		local json = safeReadFile(SAVE_FILE_NAME)
+		if json then
+			local result = HttpService:JSONDecode(json)
+			if result and result.Slots then
+				MacroData = result
+				if MacroData.AutoSpeedEnabled == nil then MacroData.AutoSpeedEnabled = true end
+			end
+		end
+	end)
+end
+
+local function loadSlotToRuntime(slotNumber)
+	recordedActions = {}
+	pcall(function()
+		local targetActions = MacroData.Slots[slotNumber] or {}
+		for _, act in ipairs(targetActions) do
+			local actCopy = {
+				time = act.time,
+				type = act.type,
+				towerName = act.towerName
+			}
+			if act.pos then actCopy.pos = Vector3.new(act.pos.X, act.pos.Y, act.pos.Z) end
+			if act.args then
+				actCopy.args = {}
+				for i, v in ipairs(act.args) do
+					if typeof(v) == "table" and v.Type == "Vector3" then
+						actCopy.args[i] = Vector3.new(v.X, v.Y, v.Z)
+					else
+						actCopy.args[i] = v
+					end
+				end
+			end
+			table.insert(serializableActions, actCopy)
+		end
+	end)
+end
+
+-- Safe UI Parent Detector
+local function getUIContainer()
+	local container = nil
+	pcall(function()
+		if gethui then
+			container = gethui()
+		elseif CoreGui then
+			container = CoreGui
+		end
+	end)
+	if not container then
+		container = LocalPlayer:WaitForChild("PlayerGui")
+	end
+	return container
+end
+
+-- Hapus UI lama jika ada agar tidak bertumpuk
+pcall(function()
+	local targetParent = getUIContainer()
+	if targetParent:FindFirstChild("MultiSlotMacroUI") then
+		targetParent.MultiSlotMacroUI:Destroy()
+	end
+end)
+
+-- ============================================
+-- USER INTERFACE
+-- ============================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MultiSlotMacroUI"
+ScreenGui.ResetOnSpawn = false
+
+local successUI, errUI = pcall(function()
+	ScreenGui.Parent = getUIContainer()
+end)
+
+if not successUI then
+	ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 210, 0, 250)
+MainFrame.Position = UDim2.new(0.05, 0, 0.25, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.BackgroundTransparency = 1
+Title.Text = "Multi-Slot Macro Manager"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 12
+Title.Font = Enum.Font.SourceSansBold
+Title.Parent = MainFrame
+
+local ButtonContainer = Instance.new("Frame")
+ButtonContainer.Size = UDim2.new(0.9, 0, 0.82, 0)
+ButtonContainer.Position = UDim2.new(0.05, 0, 0.14, 0)
+ButtonContainer.BackgroundTransparency = 1
+ButtonContainer.Parent = MainFrame
+
+local UIList = Instance.new("UIListLayout")
+UIList.SortOrder = Enum.S
