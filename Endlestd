@@ -5,10 +5,10 @@ local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 
--- Remote Event dengan Timeout aman
-local PlaceEvent = ReplicatedStorage:WaitForChild("PlaceTurret", 3)
-local TurretAction = ReplicatedStorage:WaitForChild("TurretAction", 3)
-local SpeedEvent = ReplicatedStorage:FindFirstChild("SetGameSpeed") or ReplicatedStorage:WaitForChild("SetGameSpeed", 2)
+-- Remote Event dengan Timeout
+local PlaceEvent = ReplicatedStorage:WaitForChild("PlaceTurret", 5)
+local TurretAction = ReplicatedStorage:WaitForChild("TurretAction", 5)
+local SpeedEvent = ReplicatedStorage:FindFirstChild("SetGameSpeed") or ReplicatedStorage:WaitForChild("SetGameSpeed", 3)
 
 -- File Storage
 local SAVE_FILE_NAME = "RobloxTowerMacro_MultiSlots.json"
@@ -30,159 +30,159 @@ local isPlaying = false
 local startTime = 0
 local recordedActions = {}
 
--- Safe File Operations (Tidak akan membuat script crash/gantung jika executor tidak support)
+local function logConsole(msg)
+	print("[MACRO LOG]: " .. tostring(msg))
+end
+
+-- Fallback Safe File System
 local function safeWriteFile(name, content)
-	pcall(function()
-		if writefile then
-			writefile(name, content)
-		end
-	end)
+	if writefile then pcall(writefile, name, content) end
 end
 
 local function safeReadFile(name)
-	local result = nil
-	pcall(function()
-		if readfile and isfile and isfile(name) then
-			result = readfile(name)
-		end
-	end)
-	return result
+	if readfile and isfile and isfile(name) then
+		local s, res = pcall(readfile, name)
+		if s then return res end
+	end
+	return nil
 end
 
--- Storage Logic Safe
+local function setGameSpeedTo2X()
+	if not MacroData.AutoSpeedEnabled then return end
+	if SpeedEvent then
+		pcall(function()
+			SpeedEvent:FireServer(2)
+		end)
+	end
+end
+
+-- Storage Logic
 local function saveAllDataToFile()
-	pcall(function()
-		local serializableActions = {}
-		for _, act in ipairs(recordedActions) do
-			local actCopy = {
-				time = act.time,
-				type = act.type,
-				towerName = act.towerName
-			}
-			if act.pos then actCopy.pos = {X = act.pos.X, Y = act.pos.Y, Z = act.pos.Z} end
-			if act.args then
-				actCopy.args = {}
-				for i, v in ipairs(act.args) do
-					if typeof(v) == "Vector3" then
-						actCopy.args[i] = {Type = "Vector3", X = v.X, Y = v.Y, Z = v.Z}
-					else
-						actCopy.args[i] = v
-					end
+	local serializableActions = {}
+	for _, act in ipairs(recordedActions) do
+		local actCopy = {
+			time = act.time,
+			type = act.type,
+			towerName = act.towerName
+		}
+		if act.pos then actCopy.pos = {X = act.pos.X, Y = act.pos.Y, Z = act.pos.Z} end
+		if act.args then
+			actCopy.args = {}
+			for i, v in ipairs(act.args) do
+				if typeof(v) == "Vector3" then
+					actCopy.args[i] = {Type = "Vector3", X = v.X, Y = v.Y, Z = v.Z}
+				else
+					actCopy.args[i] = v
 				end
 			end
-			table.insert(serializableActions, actCopy)
 		end
+		table.insert(serializableActions, actCopy)
+	end
 
-		MacroData.Slots[MacroData.SelectedSlot] = serializableActions
-		local json = HttpService:JSONEncode(MacroData)
+	MacroData.Slots[MacroData.SelectedSlot] = serializableActions
+
+	local success, json = pcall(function() return HttpService:JSONEncode(MacroData) end)
+	if success then
 		safeWriteFile(SAVE_FILE_NAME, json)
-	end)
+	end
 end
 
 local function loadAllDataFromFile()
-	pcall(function()
-		local json = safeReadFile(SAVE_FILE_NAME)
-		if json then
-			local result = HttpService:JSONDecode(json)
-			if result and result.Slots then
-				MacroData = result
-				if MacroData.AutoSpeedEnabled == nil then MacroData.AutoSpeedEnabled = true end
-			end
-		end
-	end)
+	local json = safeReadFile(SAVE_FILE_NAME)
+	if not json then return false end
+
+	local success, result = pcall(function() return HttpService:JSONDecode(json) end)
+	if success and result and result.Slots then
+		MacroData = result
+		if MacroData.AutoSpeedEnabled == nil then MacroData.AutoSpeedEnabled = true end
+		return true
+	end
+	return false
 end
 
 local function loadSlotToRuntime(slotNumber)
 	recordedActions = {}
-	pcall(function()
-		local targetActions = MacroData.Slots[slotNumber] or {}
-		for _, act in ipairs(targetActions) do
-			local actCopy = {
-				time = act.time,
-				type = act.type,
-				towerName = act.towerName
-			}
-			if act.pos then actCopy.pos = Vector3.new(act.pos.X, act.pos.Y, act.pos.Z) end
-			if act.args then
-				actCopy.args = {}
-				for i, v in ipairs(act.args) do
-					if typeof(v) == "table" and v.Type == "Vector3" then
-						actCopy.args[i] = Vector3.new(v.X, v.Y, v.Z)
-					else
-						actCopy.args[i] = v
-					end
+	local targetActions = MacroData.Slots[slotNumber] or {}
+
+	for _, act in ipairs(targetActions) do
+		local actCopy = {
+			time = act.time,
+			type = act.type,
+			towerName = act.towerName
+		}
+		if act.pos then actCopy.pos = Vector3.new(act.pos.X, act.pos.Y, act.pos.Z) end
+		if act.args then
+			actCopy.args = {}
+			for i, v in ipairs(act.args) do
+				if typeof(v) == "table" and v.Type == "Vector3" then
+					actCopy.args[i] = Vector3.new(v.X, v.Y, v.Z)
+				else
+					actCopy.args[i] = v
 				end
 			end
-			table.insert(serializableActions, actCopy)
 		end
-	end)
+		table.insert(recordedActions, actCopy)
+	end
 end
 
--- Safe UI Parent Detector
-local function getUIContainer()
-	local container = nil
-	pcall(function()
-		if gethui then
-			container = gethui()
-		elseif CoreGui then
-			container = CoreGui
+-- Spatial Helper
+local function getTowerNearPosition(targetPos)
+	if not targetPos then return nil end
+	local closestTower = nil
+	local shortestDistance = 5
+
+	for _, obj in ipairs(workspace:GetDescendants()) do
+		if obj:IsA("Model") and (obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")) then
+			local part = obj.PrimaryPart or obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChildWhichIsA("BasePart")
+			if part then
+				local dist = (part.Position - targetPos).Magnitude
+				if dist < shortestDistance then
+					shortestDistance = dist
+					closestTower = obj
+				end
+			end
 		end
-	end)
-	if not container then
-		container = LocalPlayer:WaitForChild("PlayerGui")
 	end
-	return container
+	return closestTower
 end
 
--- Hapus UI lama jika ada agar tidak bertumpuk
-pcall(function()
-	local targetParent = getUIContainer()
-	if targetParent:FindFirstChild("MultiSlotMacroUI") then
-		targetParent.MultiSlotMacroUI:Destroy()
+local function getTowerPosition(towerInstance)
+	if typeof(towerInstance) == "Instance" then
+		local part = towerInstance.PrimaryPart or towerInstance:FindFirstChild("HumanoidRootPart") or towerInstance:FindFirstChildWhichIsA("BasePart")
+		if part then return part.Position end
 	end
-end)
-
--- ============================================
--- USER INTERFACE
--- ============================================
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "MultiSlotMacroUI"
-ScreenGui.ResetOnSpawn = false
-
-local successUI, errUI = pcall(function()
-	ScreenGui.Parent = getUIContainer()
-end)
-
-if not successUI then
-	ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+	return nil
 end
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 210, 0, 250)
-MainFrame.Position = UDim2.new(0.05, 0, 0.25, 0)
-MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-MainFrame.Active = true
-MainFrame.Draggable = true
-MainFrame.Parent = ScreenGui
+-- Play Engine
+local playThread = nil
 
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = MainFrame
+local function stopPlayMacro()
+	isPlaying = false
+	if playThread then
+		task.cancel(playThread)
+		playThread = nil
+	end
+end
 
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, 0, 0, 30)
-Title.BackgroundTransparency = 1
-Title.Text = "Multi-Slot Macro Manager"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 12
-Title.Font = Enum.Font.SourceSansBold
-Title.Parent = MainFrame
+local function playMacro(playBtnRef)
+	if #recordedActions == 0 then return end
 
-local ButtonContainer = Instance.new("Frame")
-ButtonContainer.Size = UDim2.new(0.9, 0, 0.82, 0)
-ButtonContainer.Position = UDim2.new(0.05, 0, 0.14, 0)
-ButtonContainer.BackgroundTransparency = 1
-ButtonContainer.Parent = MainFrame
+	isPlaying = true
+	setGameSpeedTo2X()
 
-local UIList = Instance.new("UIListLayout")
-UIList.SortOrder = Enum.S
+	local playStartTime = tick()
+
+	playThread = task.spawn(function()
+		for index, action in ipairs(recordedActions) do
+			if not isPlaying then break end
+
+			local currentTime = tick() - playStartTime
+			local waitTime = action.time - currentTime
+			if waitTime > 0 then task.wait(waitTime) end
+
+			if not isPlaying then break end
+
+			if action.type == "PLACE" and PlaceEvent then
+				PlaceEvent:FireServer(unpack(action.args))
+			elseif (action.type == 
