@@ -1,188 +1,619 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local Players = game:GetService("Players")
-local CoreGui = game:GetService("CoreGui")
 local HttpService = game:GetService("HttpService")
-
+local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- Remote Event dengan Timeout
-local PlaceEvent = ReplicatedStorage:WaitForChild("PlaceTurret", 5)
-local TurretAction = ReplicatedStorage:WaitForChild("TurretAction", 5)
+-- Safely Fetch Remotes
+local PlaceEvent = ReplicatedStorage:FindFirstChild("PlaceTurret") or ReplicatedStorage:WaitForChild("PlaceTurret", 3)
+local ActionEvent = ReplicatedStorage:FindFirstChild("TurretAction") or ReplicatedStorage:WaitForChild("TurretAction", 3)
 local SpeedEvent = ReplicatedStorage:FindFirstChild("SetGameSpeed") or ReplicatedStorage:WaitForChild("SetGameSpeed", 3)
 
--- File Storage
-local SAVE_FILE_NAME = "RobloxTowerMacro_MultiSlots.json"
+-- Folder Penyimpanan File Makro
+local FOLDER_NAME = "TowerMacroConfig"
+if makefolder and not isfolder(FOLDER_NAME) then
+	makefolder(FOLDER_NAME)
+end
 
--- Database Macro Default
-local MacroData = {
-	SelectedSlot = 1,
-	AutoPlayEnabled = false,
-	AutoPlaySlot = 1,
-	AutoSpeedEnabled = true,
-	Slots = {
-		[1] = {}, [2] = {}, [3] = {}, [4] = {}, [5] = {}
-	}
-}
-
--- State Macro Runtime
+-- State Variables
 local isRecording = false
 local isPlaying = false
+local autoSpeedEnabled = true
+local autoPlayEnabled = false
 local startTime = 0
-local recordedActions = {}
+local macroData = {}
+
+local recordedTurretsOrder = {}
+local spawnedTurretsPlayback = {}
+
+-- ==========================================
+-- HELPER SPEED FUNCTION
+-- ==========================================
+local function setSpeed(multiplier)
+	if SpeedEvent then
+		if SpeedEvent:IsA("RemoteFunction") then
+			SpeedEvent:InvokeServer(multiplier)
+		else
+			SpeedEvent:FireServer(multiplier)
+		end
+	end
+end
+
+-- ==========================================
+-- UI SETUP
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "TowerMacroUI_Windowed"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.DisplayOrder = 100
+ScreenGui.Parent = PlayerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 240, 0, 340) -- Ukuran diperbesar sedikit untuk tombol Copy
+MainFrame.Position = UDim2.new(0.02, 0, 0.25, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
+
+-- Title Bar
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(0.65, 0, 0, 26)
+Title.Position = UDim2.new(0.04, 0, 0, 0)
+Title.Text = "Macro Manager"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 11
+Title.Font = Enum.Font.SourceSansBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.BackgroundTransparency = 1
+Title.Parent = MainFrame
+
+-- Tombol Minimize (-)
+local BtnMinimize = Instance.new("TextButton")
+BtnMinimize.Size = UDim2.new(0, 20, 0, 20)
+BtnMinimize.Position = UDim2.new(1, -48, 0, 3)
+BtnMinimize.Text = "-"
+BtnMinimize.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+BtnMinimize.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnMinimize.Font = Enum.Font.SourceSansBold
+BtnMinimize.TextSize = 14
+BtnMinimize.Parent = MainFrame
+Instance.new("UICorner", BtnMinimize).CornerRadius = UDim.new(0, 4)
+
+-- Tombol Close (X)
+local BtnClose = Instance.new("TextButton")
+BtnClose.Size = UDim2.new(0, 20, 0, 20)
+BtnClose.Position = UDim2.new(1, -24, 0, 3)
+BtnClose.Text = "X"
+BtnClose.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+BtnClose.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnClose.Font = Enum.Font.SourceSansBold
+BtnClose.TextSize = 12
+BtnClose.Parent = MainFrame
+Instance.new("UICorner", BtnClose).CornerRadius = UDim.new(0, 4)
+
+-- Tombol Melayang saat Di-minimize (Restore Button)
+local RestoreBtn = Instance.new("TextButton")
+RestoreBtn.Size = UDim2.new(0, 80, 0, 26)
+RestoreBtn.Position = UDim2.new(0.02, 0, 0.25, 0)
+RestoreBtn.Text = "Open Macro"
+RestoreBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+RestoreBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+RestoreBtn.Font = Enum.Font.SourceSansBold
+RestoreBtn.TextSize = 11
+RestoreBtn.Visible = false
+RestoreBtn.Active = true
+RestoreBtn.Draggable = true
+RestoreBtn.Parent = ScreenGui
+Instance.new("UICorner", RestoreBtn).CornerRadius = UDim.new(0, 6)
+
+-- Input Nama File Save
+local InputFileName = Instance.new("TextBox")
+InputFileName.Size = UDim2.new(0.88, 0, 0, 24)
+InputFileName.Position = UDim2.new(0.06, 0, 0.08, 0)
+InputFileName.PlaceholderText = "Nama Config (cth: Map1)"
+InputFileName.Text = "Makro1"
+InputFileName.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+InputFileName.TextColor3 = Color3.fromRGB(255, 255, 255)
+InputFileName.Font = Enum.Font.SourceSans
+InputFileName.TextSize = 12
+InputFileName.Parent = MainFrame
+Instance.new("UICorner", InputFileName).CornerRadius = UDim.new(0, 4)
+
+-- Tombol Record
+local BtnRecord = Instance.new("TextButton")
+BtnRecord.Size = UDim2.new(0.42, 0, 0, 26)
+BtnRecord.Position = UDim2.new(0.06, 0, 0.16, 0)
+BtnRecord.Text = "Record"
+BtnRecord.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+BtnRecord.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnRecord.Font = Enum.Font.SourceSansBold
+BtnRecord.TextSize = 12
+BtnRecord.ZIndex = 5
+BtnRecord.Parent = MainFrame
+Instance.new("UICorner", BtnRecord).CornerRadius = UDim.new(0, 4)
+
+-- Tombol Play
+local BtnPlay = Instance.new("TextButton")
+BtnPlay.Size = UDim2.new(0.42, 0, 0, 26)
+BtnPlay.Position = UDim2.new(0.52, 0, 0.16, 0)
+BtnPlay.Text = "Play"
+BtnPlay.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+BtnPlay.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnPlay.Font = Enum.Font.SourceSansBold
+BtnPlay.TextSize = 12
+BtnPlay.ZIndex = 5
+BtnPlay.Parent = MainFrame
+Instance.new("UICorner", BtnPlay).CornerRadius = UDim.new(0, 4)
+
+-- Tombol Save Config
+local BtnSave = Instance.new("TextButton")
+BtnSave.Size = UDim2.new(0.42, 0, 0, 24)
+BtnSave.Position = UDim2.new(0.06, 0, 0.25, 0)
+BtnSave.Text = "Save Config"
+BtnSave.BackgroundColor3 = Color3.fromRGB(130, 80, 220)
+BtnSave.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnSave.Font = Enum.Font.SourceSansBold
+BtnSave.TextSize = 11
+BtnSave.Parent = MainFrame
+Instance.new("UICorner", BtnSave).CornerRadius = UDim.new(0, 4)
+
+-- Tombol Load Config
+local BtnLoad = Instance.new("TextButton")
+BtnLoad.Size = UDim2.new(0.42, 0, 0, 24)
+BtnLoad.Position = UDim2.new(0.52, 0, 0.25, 0)
+BtnLoad.Text = "Load Config"
+BtnLoad.BackgroundColor3 = Color3.fromRGB(200, 130, 30)
+BtnLoad.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnLoad.Font = Enum.Font.SourceSansBold
+BtnLoad.TextSize = 11
+BtnLoad.Parent = MainFrame
+Instance.new("UICorner", BtnLoad).CornerRadius = UDim.new(0, 4)
+
+-- FITUR BARU: Tombol Copy Data Macro
+local BtnCopyData = Instance.new("TextButton")
+BtnCopyData.Size = UDim2.new(0.88, 0, 0, 22)
+BtnCopyData.Position = UDim2.new(0.06, 0, 0.33, 0)
+BtnCopyData.Text = "📋 Copy Data Macro"
+BtnCopyData.BackgroundColor3 = Color3.fromRGB(0, 150, 180)
+BtnCopyData.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnCopyData.Font = Enum.Font.SourceSansBold
+BtnCopyData.TextSize = 11
+BtnCopyData.Parent = MainFrame
+Instance.new("UICorner", BtnCopyData).CornerRadius = UDim.new(0, 4)
+
+-- Toggle Speed 2x
+local BtnSpeedToggle = Instance.new("TextButton")
+BtnSpeedToggle.Size = UDim2.new(0.88, 0, 0, 22)
+BtnSpeedToggle.Position = UDim2.new(0.06, 0, 0.41, 0)
+BtnSpeedToggle.Text = "Auto 2x Speed: ON"
+BtnSpeedToggle.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+BtnSpeedToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnSpeedToggle.Font = Enum.Font.SourceSansBold
+BtnSpeedToggle.TextSize = 11
+BtnSpeedToggle.Parent = MainFrame
+Instance.new("UICorner", BtnSpeedToggle).CornerRadius = UDim.new(0, 4)
+
+-- Toggle Auto Play (Rejoin Support)
+local BtnAutoPlayToggle = Instance.new("TextButton")
+BtnAutoPlayToggle.Size = UDim2.new(0.88, 0, 0, 22)
+BtnAutoPlayToggle.Position = UDim2.new(0.06, 0, 0.49, 0)
+BtnAutoPlayToggle.Text = "Auto Play On Rejoin: OFF"
+BtnAutoPlayToggle.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+BtnAutoPlayToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+BtnAutoPlayToggle.Font = Enum.Font.SourceSansBold
+BtnAutoPlayToggle.TextSize = 11
+BtnAutoPlayToggle.Parent = MainFrame
+Instance.new("UICorner", BtnAutoPlayToggle).CornerRadius = UDim.new(0, 4)
+
+-- Console Status
+local StatusLog = Instance.new("TextLabel")
+StatusLog.Size = UDim2.new(0.88, 0, 0, 110)
+StatusLog.Position = UDim2.new(0.06, 0, 0.58, 0)
+StatusLog.BackgroundColor3 = Color3.fromRGB(15, 15, 18)
+StatusLog.TextColor3 = Color3.fromRGB(0, 255, 150)
+StatusLog.TextSize = 10
+StatusLog.Font = Enum.Font.Code
+StatusLog.TextWrapped = true
+StatusLog.TextYAlignment = Enum.TextYAlignment.Top
+StatusLog.TextXAlignment = Enum.TextXAlignment.Left
+StatusLog.Text = "System Ready..."
+StatusLog.Parent = MainFrame
+Instance.new("UICorner", StatusLog).CornerRadius = UDim.new(0, 4)
 
 local function logConsole(msg)
 	print("[MACRO LOG]: " .. tostring(msg))
+	StatusLog.Text = tostring(msg)
 end
 
--- Fallback Safe File System
-local function safeWriteFile(name, content)
-	if writefile then pcall(writefile, name, content) end
-end
+-- ==========================================
+-- WINDOW CONTROLS
+-- ==========================================
 
-local function safeReadFile(name)
-	if readfile and isfile and isfile(name) then
-		local s, res = pcall(readfile, name)
-		if s then return res end
-	end
-	return nil
-end
+BtnMinimize.MouseButton1Click:Connect(function()
+	MainFrame.Visible = false
+	RestoreBtn.Position = UDim2.new(MainFrame.Position.X.Scale, MainFrame.Position.X.Offset, MainFrame.Position.Y.Scale, MainFrame.Position.Y.Offset)
+	RestoreBtn.Visible = true
+end)
 
-local function setGameSpeedTo2X()
-	if not MacroData.AutoSpeedEnabled then return end
-	if SpeedEvent then
-		pcall(function()
-			SpeedEvent:FireServer(2)
-		end)
-	end
-end
+RestoreBtn.MouseButton1Click:Connect(function()
+	RestoreBtn.Visible = false
+	MainFrame.Position = UDim2.new(RestoreBtn.Position.X.Scale, RestoreBtn.Position.X.Offset, RestoreBtn.Position.Y.Scale, RestoreBtn.Position.Y.Offset)
+	MainFrame.Visible = true
+end)
 
--- Storage Logic
-local function saveAllDataToFile()
-	local serializableActions = {}
-	for _, act in ipairs(recordedActions) do
-		local actCopy = {
-			time = act.time,
-			type = act.type,
-			towerName = act.towerName
+BtnClose.MouseButton1Click:Connect(function()
+	ScreenGui:Destroy()
+end)
+
+-- ==========================================
+-- SAVE & LOAD SYSTEM
+-- ==========================================
+
+local function serializeData(data)
+	local serialized = {}
+	for _, entry in ipairs(data) do
+		local copy = {
+			Type = entry.Type,
+			Time = entry.Time,
+			TurretIndex = entry.TurretIndex,
+			TowerId = entry.TowerId,
+			TurretName = entry.TurretName
 		}
-		if act.pos then actCopy.pos = {X = act.pos.X, Y = act.pos.Y, Z = act.pos.Z} end
-		if act.args then
-			actCopy.args = {}
-			for i, v in ipairs(act.args) do
-				if typeof(v) == "Vector3" then
-					actCopy.args[i] = {Type = "Vector3", X = v.X, Y = v.Y, Z = v.Z}
-				else
-					actCopy.args[i] = v
-				end
-			end
+		if entry.Position then
+			copy.Position = {X = entry.Position.X, Y = entry.Position.Y, Z = entry.Position.Z}
 		end
-		table.insert(serializableActions, actCopy)
+		table.insert(serialized, copy)
 	end
-
-	MacroData.Slots[MacroData.SelectedSlot] = serializableActions
-
-	local success, json = pcall(function() return HttpService:JSONEncode(MacroData) end)
-	if success then
-		safeWriteFile(SAVE_FILE_NAME, json)
-	end
+	return serialized
 end
 
-local function loadAllDataFromFile()
-	local json = safeReadFile(SAVE_FILE_NAME)
-	if not json then return false end
-
-	local success, result = pcall(function() return HttpService:JSONDecode(json) end)
-	if success and result and result.Slots then
-		MacroData = result
-		if MacroData.AutoSpeedEnabled == nil then MacroData.AutoSpeedEnabled = true end
-		return true
-	end
-	return false
-end
-
-local function loadSlotToRuntime(slotNumber)
-	recordedActions = {}
-	local targetActions = MacroData.Slots[slotNumber] or {}
-
-	for _, act in ipairs(targetActions) do
-		local actCopy = {
-			time = act.time,
-			type = act.type,
-			towerName = act.towerName
+local function deserializeData(data)
+	local deserialized = {}
+	for _, entry in ipairs(data) do
+		local copy = {
+			Type = entry.Type,
+			Time = entry.Time,
+			TurretIndex = entry.TurretIndex,
+			TowerId = entry.TowerId,
+			TurretName = entry.TurretName
 		}
-		if act.pos then actCopy.pos = Vector3.new(act.pos.X, act.pos.Y, act.pos.Z) end
-		if act.args then
-			actCopy.args = {}
-			for i, v in ipairs(act.args) do
-				if typeof(v) == "table" and v.Type == "Vector3" then
-					actCopy.args[i] = Vector3.new(v.X, v.Y, v.Z)
-				else
-					actCopy.args[i] = v
-				end
-			end
+		if entry.Position then
+			copy.Position = Vector3.new(entry.Position.X, entry.Position.Y, entry.Position.Z)
 		end
-		table.insert(recordedActions, actCopy)
+		table.insert(deserialized, copy)
 	end
+	return deserialized
 end
 
--- Spatial Helper
-local function getTowerNearPosition(targetPos)
-	if not targetPos then return nil end
-	local closestTower = nil
-	local shortestDistance = 5
+local function saveMacroToFile(fileName)
+	if #macroData == 0 then
+		logConsole("Error: Tidak ada data makro!")
+		return
+	end
+	if not writefile then
+		logConsole("Error: Executor tidak support writefile!")
+		return
+	end
 
-	for _, obj in ipairs(workspace:GetDescendants()) do
-		if obj:IsA("Model") and (obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")) then
-			local part = obj.PrimaryPart or obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChildWhichIsA("BasePart")
-			if part then
-				local dist = (part.Position - targetPos).Magnitude
-				if dist < shortestDistance then
-					shortestDistance = dist
-					closestTower = obj
-				end
-			end
+	local filePath = FOLDER_NAME .. "/" .. fileName .. ".json"
+	local formattedData = serializeData(macroData)
+	local jsonString = HttpService:JSONEncode(formattedData)
+	writefile(filePath, jsonString)
+	logConsole("Tersimpan: " .. fileName .. ".json")
+end
+
+local function loadMacroFromFile(fileName)
+	if not readfile or not isfile then
+		logConsole("Error: Executor tidak support readfile!")
+		return false
+	end
+
+	local filePath = FOLDER_NAME .. "/" .. fileName .. ".json"
+	if not isfile(filePath) then
+		logConsole("File " .. fileName .. " tidak ditemukan!")
+		return false
+	end
+
+	local jsonString = readfile(filePath)
+	local rawData = HttpService:JSONDecode(jsonString)
+	macroData = deserializeData(rawData)
+	logConsole("Loaded: " .. fileName .. " (" .. #macroData .. " aksi)")
+	return true
+end
+
+local function setAutoPlayState(state, configName)
+	if not writefile then return end
+	local autoPlayData = {
+		Enabled = state,
+		ConfigName = configName or "Makro1"
+	}
+	writefile(FOLDER_NAME .. "/AutoPlaySettings.json", HttpService:JSONEncode(autoPlayData))
+end
+
+local function getAutoPlayState()
+	if not isfile or not readfile then return false, nil end
+	local path = FOLDER_NAME .. "/AutoPlaySettings.json"
+	if isfile(path) then
+		local data = HttpService:JSONDecode(readfile(path))
+		return data.Enabled, data.ConfigName
+	end
+	return false, nil
+end
+
+-- FITUR BARU: Fungsi Konversi Data Makro ke Teks Lua Kode & Copy
+local function copyMacroDataToClipboard()
+	if #macroData == 0 then
+		logConsole("Error: Tidak ada data untuk di-copy!")
+		return
+	end
+
+	local luaTableString = "local MACRO_DATA = {\n"
+	for _, entry in ipairs(macroData) do
+		if entry.Type == "Place" then
+			local posStr = string.format("Vector3.new(%.2f, %.2f, %.2f)", entry.Position.X, entry.Position.Y, entry.Position.Z)
+			luaTableString = luaTableString .. string.format('\t{ Type = "Place", Time = %.2f, TowerId = "%s", Position = %s, TurretIndex = %d },\n', entry.Time, tostring(entry.TowerId), posStr, entry.TurretIndex)
+		elseif entry.Type == "Upgrade" then
+			luaTableString = luaTableString .. string.format('\t{ Type = "Upgrade", Time = %.2f, TurretIndex = %d },\n', entry.Time, entry.TurretIndex)
 		end
 	end
-	return closestTower
-end
+	luaTableString = luaTableString .. "}"
 
-local function getTowerPosition(towerInstance)
-	if typeof(towerInstance) == "Instance" then
-		local part = towerInstance.PrimaryPart or towerInstance:FindFirstChild("HumanoidRootPart") or towerInstance:FindFirstChildWhichIsA("BasePart")
-		if part then return part.Position end
-	end
-	return nil
-end
-
--- Play Engine
-local playThread = nil
-
-local function stopPlayMacro()
-	isPlaying = false
-	if playThread then
-		task.cancel(playThread)
-		playThread = nil
+	local setclipboardFunc = setclipboard or toclipboard or set_clipboard
+	if setclipboardFunc then
+		setclipboardFunc(luaTableString)
+		logConsole("✅ Data Makro Berhasil Di-copy ke Clipboard!")
+	else
+		logConsole("Error: Executor tidak mendukung setclipboard!")
 	end
 end
 
-local function playMacro(playBtnRef)
-	if #recordedActions == 0 then return end
+-- ==========================================
+-- PLAYBACK ENGINE
+-- ==========================================
+local function getGameSpeed()
+	return autoSpeedEnabled and 2 or 1
+end
+
+local function startPlayback()
+	if isRecording or isPlaying then return end
+	if #macroData == 0 then
+		logConsole("Error: Data Makro Kosong!")
+		return
+	end
 
 	isPlaying = true
-	setGameSpeedTo2X()
+	spawnedTurretsPlayback = {}
+	if autoSpeedEnabled then
+		setSpeed(2)
+	end
+	BtnPlay.Text = "Playing..."
+	BtnPlay.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
+	logConsole("Playback Started...")
 
-	local playStartTime = tick()
+	local turretConnection
+	local placedFolder = workspace:FindFirstChild("PlacedTurrets") or workspace:WaitForChild("PlacedTurrets", 5)
+	if placedFolder then
+		turretConnection = placedFolder.ChildAdded:Connect(function(child)
+			if isPlaying then
+				table.insert(spawnedTurretsPlayback, child)
+			end
+		end)
+	end
 
-	playThread = task.spawn(function()
-		for index, action in ipairs(recordedActions) do
+	task.spawn(function()
+		local playStartTime = os.clock()
+
+		for index, action in ipairs(macroData) do
 			if not isPlaying then break end
 
-			local currentTime = tick() - playStartTime
-			local waitTime = action.time - currentTime
-			if waitTime > 0 then task.wait(waitTime) end
+			local targetTime = action.Time
+			while (os.clock() - playStartTime) * getGameSpeed() < targetTime do
+				task.wait()
+			end
 
-			if not isPlaying then break end
+			if action.Type == "Place" and PlaceEvent then
+				PlaceEvent:FireServer(action.TowerId, action.Position)
+				logConsole(string.format("[%d/%d] Place #%d", index, #macroData, action.TurretIndex))
+			elseif action.Type == "Upgrade" and ActionEvent then
+				local targetTurret = spawnedTurretsPlayback[action.TurretIndex]
+				if targetTurret and targetTurret:IsDescendantOf(workspace) then
+					if ActionEvent:IsA("RemoteFunction") then
+						ActionEvent:InvokeServer("Upgrade", targetTurret)
+					else
+						ActionEvent:FireServer("Upgrade", targetTurret)
+					end
+					logConsole(string.format("[%d/%d] Upgrade: %s", index, #macroData, targetTurret.Name))
+				else
+					logConsole(string.format("[%d/%d] Tower #%d Hilang!", index, #macroData, action.TurretIndex))
+				end
+			end
+		end
 
-			if action.type == "PLACE" and PlaceEvent then
-				PlaceEvent:FireServer(unpack(action.args))
-			elseif (action.type == 
+		if turretConnection then turretConnection:Disconnect() end
+		isPlaying = false
+		BtnPlay.Text = "Play"
+		BtnPlay.BackgroundColor3 = Color3.fromRGB(40, 180, 80)
+		logConsole("Playback Selesai!")
+	end)
+end
+
+-- ==========================================
+-- BUTTON LISTENERS
+-- ==========================================
+
+BtnRecord.MouseButton1Click:Connect(function()
+	if isPlaying then return end
+
+	isRecording = not isRecording
+	if isRecording then
+		macroData = {}
+		recordedTurretsOrder = {}
+		startTime = os.clock()
+		if autoSpeedEnabled then
+			setSpeed(2)
+		end
+		BtnRecord.Text = "Stop Record"
+		BtnRecord.BackgroundColor3 = Color3.fromRGB(120, 120, 120)
+		logConsole("Recording...")
+	else
+		BtnRecord.Text = "Record"
+		BtnRecord.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+		logConsole(string.format("Stopped. %d aksi saved.", #macroData))
+	end
+end)
+
+BtnPlay.MouseButton1Click:Connect(function()
+	startPlayback()
+end)
+
+BtnSave.MouseButton1Click:Connect(function()
+	local name = InputFileName.Text ~= "" and InputFileName.Text or "Makro1"
+	saveMacroToFile(name)
+end)
+
+BtnLoad.MouseButton1Click:Connect(function()
+	local name = InputFileName.Text ~= "" and InputFileName.Text or "Makro1"
+	loadMacroFromFile(name)
+end)
+
+BtnCopyData.MouseButton1Click:Connect(function()
+	copyMacroDataToClipboard()
+end)
+
+BtnSpeedToggle.MouseButton1Click:Connect(function()
+	autoSpeedEnabled = not autoSpeedEnabled
+	if autoSpeedEnabled then
+		setSpeed(2)
+		BtnSpeedToggle.Text = "Auto 2x Speed: ON"
+		BtnSpeedToggle.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+		logConsole("Speed Set to 2x")
+	else
+		setSpeed(1)
+		BtnSpeedToggle.Text = "Auto 2x Speed: OFF"
+		BtnSpeedToggle.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+		logConsole("Speed Set to 1x")
+	end
+end)
+
+BtnAutoPlayToggle.MouseButton1Click:Connect(function()
+	autoPlayEnabled = not autoPlayEnabled
+	local cfgName = InputFileName.Text ~= "" and InputFileName.Text or "Makro1"
+	setAutoPlayState(autoPlayEnabled, cfgName)
+	if autoPlayEnabled then
+		BtnAutoPlayToggle.Text = "Auto Play On Rejoin: ON"
+		BtnAutoPlayToggle.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+		logConsole("AutoPlay ON (" .. cfgName .. ")")
+	else
+		BtnAutoPlayToggle.Text = "Auto Play On Rejoin: OFF"
+		BtnAutoPlayToggle.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
+		logConsole("AutoPlay OFF")
+	end
+end)
+
+-- ==========================================
+-- METAMETHOD HOOKING
+-- ==========================================
+local rawNamecall
+rawNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+	local method = getnamecallmethod()
+	local args = {...}
+
+	if isRecording then
+		task.spawn(function()
+			-- Detect Place
+			if PlaceEvent and (method == "FireServer" or method == "InvokeServer") and self == PlaceEvent then
+				local towerId = args[1]
+				local position = args[2]
+
+				if position and typeof(position) == "Vector3" then
+					local elapsedTime = (os.clock() - startTime) * getGameSpeed()
+					local recordEntry = {
+						Type = "Place",
+						Time = elapsedTime,
+						TowerId = towerId,
+						Position = position,
+						TurretIndex = #recordedTurretsOrder + 1
+					}
+					table.insert(recordedTurretsOrder, "Tower_" .. tostring(#recordedTurretsOrder + 1))
+					table.insert(macroData, recordEntry)
+					logConsole(string.format("Recorded Place #%d", recordEntry.TurretIndex))
+				end
+			end
+
+			-- Detect Upgrade
+			if ActionEvent and (method == "InvokeServer" or method == "FireServer") and self == ActionEvent then
+				local actionType = args[1]
+				local targetTurret = args[2]
+
+				if actionType == "Upgrade" and targetTurret then
+					local elapsedTime = (os.clock() - startTime) * getGameSpeed()
+					local turretIndex = nil
+					for idx, turretObj in ipairs(recordedTurretsOrder) do
+						if turretObj == targetTurret then
+							turretIndex = idx
+							break
+						end
+					end
+
+					if not turretIndex then
+						table.insert(recordedTurretsOrder, targetTurret)
+						turretIndex = #recordedTurretsOrder
+					end
+
+					local recordEntry = {
+						Type = "Upgrade",
+						Time = elapsedTime,
+						TurretIndex = turretIndex,
+						TurretName = typeof(targetTurret) == "Instance" and targetTurret.Name or "Unknown"
+					}
+
+					table.insert(macroData, recordEntry)
+					logConsole(string.format("Recorded Upgrade Tower #%d", turretIndex))
+				end
+			end
+		end)
+	end
+
+	return rawNamecall(self, ...)
+end)
+
+-- Listener folder tower
+task.spawn(function()
+	local placedFolder = workspace:WaitForChild("PlacedTurrets", 5)
+	if placedFolder then
+		placedFolder.ChildAdded:Connect(function(child)
+			if isRecording then
+				if #recordedTurretsOrder > 0 and typeof(recordedTurretsOrder[#recordedTurretsOrder]) == "string" then
+					recordedTurretsOrder[#recordedTurretsOrder] = child
+				end
+			end
+		end)
+	end
+end)
+
+-- ==========================================
+-- INITIALIZATION & AUTOPLAY CHECK
+-- ==========================================
+task.spawn(function()
+	task.wait(1.5)
+	-- Eksekusi awal 2x speed jika tombol default-nya ON
+	if autoSpeedEnabled then
+		setSpeed(2)
+	end
+	local isAutoPlay, configToLoad = getAutoPlayState()
+	if isAutoPlay and configToLoad then
+		autoPlayEnabled = true
+		InputFileName.Text = configToLoad
+		BtnAutoPlayToggle.Text = "Auto Play On Rejoin: ON"
+		BtnAutoPlayToggle.BackgroundColor3 = Color3.fromRGB(0, 170, 90)
+		logConsole("AutoPlay Aktif. Memuat " .. configToLoad .. "...")
+		if loadMacroFromFile(configToLoad) then
+			task.wait(1)
+			startPlayback()
+		end
+	end
+end)
